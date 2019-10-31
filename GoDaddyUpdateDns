@@ -1,0 +1,66 @@
+#Name: GoDaddyUpdateDns
+#Description: GoDaddy DDNS Update Script
+#RouterOS: 6.45.3 (minimum required version 6.44)
+#Date:2019/10/31
+#Permissions: read,write,policy,test (all these these policies need to be set in script for the global variable)
+
+#ref0 https://gist.github.com/nansenat16/bbedb728a486b4a7fb76ae031995a317
+#ref1 https://www.instructables.com/id/Quick-and-Dirty-Dynamic-DNS-Using-GoDaddy/
+#ref2 http://www.minitw.com/post/2018/05/09/routeros-ddns-namecheap
+
+#Easy Test
+# /tool fetch http-method=put http-data="[{\"data\": \"10.10.10.10\"}]" http-header-field="content-type: application/json,Authorization: sso-key [API_KEY]:[API_SECRET]" url="https://api.godaddy.com/v1/domains/[domain]/records/A/[hostname]/"
+
+#Create Schedule running
+# /system scheduler add name=UpdateGoDaddyDns interval=15m on-event=GoDaddyUpdateDns
+
+# Check log
+# /log print where topics~"script" 
+
+# Check environment
+# :environment print
+
+# Run script
+# /system script run GoDaddyUpdateDns
+
+# Find interface
+# /ip address find interface="ether1-WAN" disabled=no
+
+#key token format is [API_KEY]:[API_SECRET]
+:local ddnkey "Authorization: sso-key [API_KEY]:[API_SECRET]"
+:local ddnsdomain "xxxx.com"
+:local ddnshostname "myserver"
+:local ddnsinterface "ether1-WAN"
+
+#:log info ("DDNS: " . $ddnsinterface)
+
+#Use global variable to check if need update
+:global ddnslastipADSL1
+# For some reason the /ip address find doesn't work and return invalid index 5 instead of 2.
+#:global ddnsipADSL1 [/ip address get [/ip address find actual-interface=$ddnsinterface disabled=no] address ]
+:global ddnsipADSL1 [/ip address get 2 address ]
+:if ([:typeof [:global ddnslastipADSL1]] = nil ) do={ :global ddnslastipADSL1 0.0.0.0/0 } else={ :set ddnslastipADSL1 $ddnslastipADSL1 }
+
+#:log info ("DDNS: " . $ddnsinterface . ", ip:" . $ddnsipADSL1 )
+
+:if ([:typeof [:global ddnsipADSL1]] = nil ) do={
+  :log info ("DDNS: No ip address present on " . $ddnsinterface . ", please check.")
+} else={
+  :local ipFormat [:pick $ddnsipADSL1 0 [:find $ddnsipADSL1 "/"]];
+  :if ($ddnsipADSL1 != $ddnslastipADSL1) do={    
+	#:log info "DDNS-Update use $ddnsinterface IP : $ipFormat"
+    :local ddnsurl "https://api.godaddy.com/v1/domains/$ddnsdomain/records/A/$ddnshostname/" 
+    :local ddnsipjson "[{\"data\": \"$ipFormat\"}]"	
+	:local headers "content-type: application/json,$ddnkey"
+	#:log info ("url:" . $ddnsurl . "  data:" . $ddnsipjson . " headers:" . $headers)
+    :local result [/tool fetch http-method=put http-data=$ddnsipjson http-header-field=$headers url=$ddnsurl as-value output=user]
+    :if ($result->"status" = "finished") do={
+        :log info ("DDNS: " . $ddnshostname . "." . $ddnsdomain . " = " . $ipFormat . " - updated")
+        :global ddnslastipADSL1 $ddnsipADSL1
+    } else={
+        :log info ("DDNS Update Error".$result->status)
+    }
+  } else={
+    :log info ("DDNS: " . $ddnshostname . "." . $ddnsdomain . " = " . $ipFormat . " - no change")
+  }
+}
